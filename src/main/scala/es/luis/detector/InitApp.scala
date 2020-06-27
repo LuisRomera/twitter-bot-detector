@@ -15,7 +15,6 @@ object InitApp {
 
     val spark = new SparkConfig(config).startSparkSession()
 
-    log.info("Init Spark Session")
 
 
 
