@@ -15,7 +15,7 @@ class UserExtractor(env: Environment) {
 
   final val log = LoggerFactory.getLogger(getClass.getName)
 
-  //private final val usersExtract: List[String] = config.getStringList("userExtract").toList
+  // private final val usersExtract: List[String] = config.getStringList("userExtract").toList
 
   val cb = new ConfigurationBuilder().setDebugEnabled(true)
     .setOAuthConsumerKey(env.getProperty("twitter.CONSUMER_KEY"))

@@ -6,107 +6,134 @@ import com.typesafe.config.{Config, ConfigFactory}
 import es.luis.detector.config.SparkConfig
 import es.luis.detector.twitter.UserExtractor
 import es.luis.detector.utils.DateTransform
-import org.apache.spark.sql.SaveMode
+import javax.annotation.PostConstruct
+import org.apache.spark.sql.{DataFrame, SaveMode}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.{col, dayofmonth, desc, minute, second, unix_timestamp}
 import org.springframework.core.env.Environment
 import org.elasticsearch.spark.sql._
+import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
+import org.springframework.stereotype.Service
 
 import scala.collection.JavaConversions._
-
+@Service
 class UserProcesor(env: Environment) {
+  final val log = LoggerFactory.getLogger(getClass.getName)
+  final val spark = new SparkConfig(env).startSparkSession()
 
-  def analyzerUser(userName: String): (String, Double) = {
+  def addCreated(frame: DataFrame):DataFrame =
+    frame.withColumn("created",
+      when(col("createdAt").contains("PM"), date_format(to_timestamp(col("createdAt"),
+        "MMM dd, yyyy HH:mm:ss") + expr("INTERVAL 12 HOURS"), "yyyy-MM-dd'T'HH:mm:ssZZ"))
+        .otherwise(
+          date_format(
+            to_timestamp(col("createdAt"),
+              "MMM dd, yyyy HH:mm:ss"), "yyyy-MM-dd'T'HH:mm:ssZZ"))
+    )
 
-    //val config:Config = ConfigFactory.load("args(0)")
+  @PostConstruct
+//  @Scheduled(cron = "0 0 2 * * ?")
+  def analyzerUser(): Unit = {
 
-    print("-------------------------- Extrayendo -------------------------- ")
-    new UserExtractor(env).extract(userName)
+    val query = "{" +
+      "        \"range\" : {" +
+      "            \"created\" : {" +
+      "                \"gte\" : \"now-24h\"," +
+      "                \"lt\" :  \"now\"" +
+      "            }" +
+      "        }" +
+      "    }"
 
-    print("-------------------------- Extraido -------------------------- ")
+    val users = spark.read
+      .format("org.elasticsearch.spark.sql")
+      .option("query", query)
+      .load("users/users-type")
+      .select("screen_name")
+      .distinct()
 
 
-    val spark = new SparkConfig(env).startSparkSession()
+    users.collect().map(_.get(0).toString).foreach(userName => {
+      try {
 
 
-    //val users = env.getProperty("userExtract").toList
-    import spark.implicits._
-    var probFinal = 0.0
+        log.info("-------------------------- Extracting -------------------------- ")
+        new UserExtractor(env).extract(userName)
 
-    //   log.info(s"userName ------------> $userName")
-    val userInfoDF = spark.read.json(s"users/$userName/info.txt")
+        log.info("-------------------------- Extracted -------------------------- ")
 
-    if (userInfoDF.select("isVerified").first().get(0).asInstanceOf[Boolean])
-      probFinal = 0.0
-    else {
+        var probFinal = 0.0
 
-      val id = userInfoDF.select("id").first().get(0).toString
-      spark.read.json(s"users/$userName/favorites.txt")
-        .saveToEs(s"${userName.toLowerCase}-favorites/${userName.toLowerCase}-favorites-type")
+        val userInfoDF = spark.read.json(s"users/$userName/info.txt")
 
-      val timeLineDF = spark.read.json(s"users/$userName/timeline.txt")
+        if (userInfoDF.select("isVerified").first().get(0).asInstanceOf[Boolean])
+          probFinal = 0.0
+        else {
 
-      timeLineDF.saveToEs(s"${userName.toLowerCase}-time-line/${userName.toLowerCase}-time-line")
+          val id = userInfoDF.select("id").first().get(0).toString
+          val favorites = addCreated(spark.read.json(s"users/$userName/favorites.txt"))
 
-      val dateTime = DateTransform.createAtToTimeStamp(timeLineDF)
-      val fistDate = dateTime.withColumn("tmp", unix_timestamp(col("createdAt"))).orderBy(desc("tmp")).select("tmp").first().get(0)
+          favorites.saveToEs(s"${userName.toLowerCase}-favorites/${userName.toLowerCase}-favorites-type")
 
-      val countPublish = timeLineDF.count()
-      val probMinute: Double = (dateTime.select("createdAt")
-        .withColumn("minute", minute(col("createdAt")))
-        .groupBy("minute").count()
-        .orderBy(desc("count"))
-        .select("count")
-        .limit((countPublish * 0.01).toInt).collect().map(r => r.get(0).asInstanceOf[Long]).toList.sum.toDouble) / countPublish.toDouble
+          val timeLineDF = addCreated(spark.read.json(s"users/$userName/timeline.txt"))
 
-      //   log.info(s"probMinute $probMinute")
 
-      val probSecond: Double = (dateTime.select("createdAt")
-        .withColumn("second", second(col("createdAt")))
-        .groupBy("second").count()
-        .orderBy(desc("count"))
-        .select("count")
-        .limit((countPublish * 0.01).toInt).collect().map(r => r.get(0).asInstanceOf[Long]).toList.sum.toDouble) / countPublish.toDouble
+          timeLineDF.saveToEs(s"${userName.toLowerCase}-time-line/${userName.toLowerCase}-time-line")
 
-      // log.info(s"probSecond $probSecond")
+          val dateTime = DateTransform.createAtToTimeStamp(timeLineDF)
+          val fistDate = dateTime.withColumn("tmp", unix_timestamp(col("createdAt"))).orderBy(desc("tmp")).select("tmp").first().get(0)
 
-      val probDay: Double = (dateTime.select("createdAt")
-        .withColumn("day", dayofmonth(col("createdAt")))
-        .groupBy("day").count()
-        .orderBy(desc("count"))
-        .select("count")
-        .limit((countPublish * 0.01).toInt).collect().map(r => r.get(0).asInstanceOf[Long]).toList.sum.toDouble) / countPublish.toDouble
+          val countPublish = timeLineDF.count()
+          val probMinute: Double = (dateTime.select("createdAt")
+            .withColumn("minute", minute(col("createdAt")))
+            .groupBy("minute").count()
+            .orderBy(desc("count"))
+            .select("count")
+            .limit((countPublish * 0.01).toInt).collect().map(r => r.get(0).asInstanceOf[Long]).toList.sum.toDouble) / countPublish.toDouble
 
-      //log.info(s"probDay $probDay")
 
-      //log.info(s"Total:  ${(probDay + probMinute + probSecond) / 3}")
-      probFinal = (probDay + probMinute + probSecond) / 3
-    }
-    userInfoDF
-      .withColumn("prob_bot", lit(probFinal)).saveToEs("users-extract/users-extract-type")
+          val probSecond: Double = (dateTime.select("createdAt")
+            .withColumn("second", second(col("createdAt")))
+            .groupBy("second").count()
+            .orderBy(desc("count"))
+            .select("count")
+            .limit((countPublish * 0.01).toInt).collect().map(r => r.get(0).asInstanceOf[Long]).toList.sum.toDouble) / countPublish.toDouble
 
-    import java.nio.file.{Files, Paths, Path, SimpleFileVisitor, FileVisitResult}
-    import java.nio.file.attribute.BasicFileAttributes
 
-    Files.walkFileTree(Paths.get(s"users/$userName"), new SimpleFileVisitor[Path] {
-      override def visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult = {
-        Files.delete(file)
-        FileVisitResult.CONTINUE
-      }
-      override def postVisitDirectory(dir: Path, exc: IOException): FileVisitResult = {
-        Files.delete(dir)
-        FileVisitResult.CONTINUE
+          val probDay: Double = (dateTime.select("createdAt")
+            .withColumn("day", dayofmonth(col("createdAt")))
+            .groupBy("day").count()
+            .orderBy(desc("count"))
+            .select("count")
+            .limit((countPublish * 0.01).toInt).collect().map(r => r.get(0).asInstanceOf[Long]).toList.sum.toDouble) / countPublish.toDouble
+
+
+          probFinal = (probDay + probMinute + probSecond) / 3
+        }
+        val userSave = addCreated(userInfoDF)
+
+        userSave.saveToEs("users-extract/users-extract-type")
+
+        import java.nio.file.{Files, Paths, Path, SimpleFileVisitor, FileVisitResult}
+        import java.nio.file.attribute.BasicFileAttributes
+
+        Files.walkFileTree(Paths.get(s"users/$userName"), new SimpleFileVisitor[Path] {
+          override def visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult = {
+            Files.delete(file)
+            FileVisitResult.CONTINUE
+          }
+
+          override def postVisitDirectory(dir: Path, exc: IOException): FileVisitResult = {
+            Files.delete(dir)
+            FileVisitResult.CONTINUE
+          }
+        })
+
+        log.info(s"$userName -> $probFinal")
+      }catch{
+        case e:Exception => log.error(s"Error analyzerUser $userName: $e")
       }
     })
-
-    (userName, probFinal)
-
-
-
-
-    //    result.foreach(u => log.info(s"User: ${u._1} -> Bot probability: ${u._2}"))
-
-
   }
 
 }

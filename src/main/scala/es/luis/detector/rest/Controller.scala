@@ -12,7 +12,6 @@ class Controller @Autowired() (env: Environment){
 
   @RequestMapping(value = Array("/user/{name}"), method = Array(RequestMethod.GET))
   def greeting(@PathVariable("name") name: String): String = {
-    val result = new UserProcesor(env).analyzerUser(name)
-    s"${result._1}: ${result._2.toString}"
+    "val result = new UserProcesor(env).analyzerUser(name)"
   }
 }
