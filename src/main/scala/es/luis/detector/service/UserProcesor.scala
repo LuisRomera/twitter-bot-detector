@@ -2,25 +2,23 @@ package es.luis.detector.service
 
 import java.io.IOException
 
-import com.typesafe.config.{Config, ConfigFactory}
-import es.luis.detector.config.SparkConfig
+import com.typesafe.config.Config
+import es.luis.detector.InitApp
 import es.luis.detector.twitter.UserExtractor
 import es.luis.detector.utils.DateTransform
-import javax.annotation.PostConstruct
-import org.apache.spark.sql.{DataFrame, SaveMode}
+import org.apache.log4j.Logger
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.functions.{col, dayofmonth, desc, minute, second, unix_timestamp}
-import org.springframework.core.env.Environment
 import org.elasticsearch.spark.sql._
-import org.slf4j.LoggerFactory
-import org.springframework.scheduling.annotation.Scheduled
-import org.springframework.stereotype.Service
+import org.joda.time.DateTime
 
-import scala.collection.JavaConversions._
-@Service
-class UserProcesor(env: Environment) {
-  final val log = LoggerFactory.getLogger(getClass.getName)
-  final val spark = new SparkConfig(env).startSparkSession()
+
+class UserProcesor(config: Config, spark: SparkSession) extends Runnable{
+  val log = Logger.getLogger(InitApp.getClass)
+
+
+//  final val spark = new SparkConfig(config).startSparkSession()
 
   def addCreated(frame: DataFrame):DataFrame =
     frame.withColumn("created",
@@ -31,9 +29,6 @@ class UserProcesor(env: Environment) {
             to_timestamp(col("createdAt"),
               "MMM dd, yyyy HH:mm:ss"), "yyyy-MM-dd'T'HH:mm:ssZZ"))
     )
-
-  @PostConstruct
-//  @Scheduled(cron = "0 0 2 * * ?")
   def analyzerUser(): Unit = {
 
     val query = "{" +
@@ -49,16 +44,18 @@ class UserProcesor(env: Environment) {
       .format("org.elasticsearch.spark.sql")
       .option("query", query)
       .load("users/users-type")
+      .orderBy(desc("created"))
       .select("screen_name")
       .distinct()
 
+    users.show()
+    val usersCollec :List[String] = users.collect().map(_.get(0).asInstanceOf[String]).toList
+    log.info(usersCollec.mkString(", "))
 
-    users.collect().map(_.get(0).toString).foreach(userName => {
-      try {
-
-
+    usersCollec.foreach(userName => {
+      //try {
         log.info("-------------------------- Extracting -------------------------- ")
-        new UserExtractor(env).extract(userName)
+        new UserExtractor(config).extract(userName)
 
         log.info("-------------------------- Extracted -------------------------- ")
 
@@ -130,10 +127,20 @@ class UserProcesor(env: Environment) {
         })
 
         log.info(s"$userName -> $probFinal")
-      }catch{
-        case e:Exception => log.error(s"Error analyzerUser $userName: $e")
-      }
+//      }catch{
+//        case e:Exception => log.error(s"Error analyzerUser $userName: $e")
+//      }
     })
   }
 
+  override def run(): Unit = {
+    while (true) {
+      val day = DateTime.now.getDayOfMonth
+      log.info(s"Init user analyzer... Init ${DateTime.now.toString()}")
+      analyzerUser()
+      log.info("Finished user analyze. Wait to next day")
+      while (day == DateTime.now.getDayOfMonth)
+        Thread.sleep(3600000)
+    }
+  }
 }

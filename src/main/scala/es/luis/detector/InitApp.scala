@@ -1,25 +1,35 @@
 package es.luis.detector
 
-import org.slf4j.LoggerFactory
-import org.springframework.boot.SpringApplication
-import org.springframework.boot.autoconfigure.{EnableAutoConfiguration, SpringBootApplication}
-import org.springframework.core.env.Environment
+import com.typesafe.config.{Config, ConfigFactory}
+import es.luis.detector.config.SparkConfig
+import es.luis.detector.service.UserProcesor
+import org.apache.log4j.{Level, Logger}
 
-@SpringBootApplication
-class InitApp
+
 
 object InitApp {
-  final val log = LoggerFactory.getLogger(getClass.getName)
+//  final val log = LoggerFactory.getLogger(getClass.getName)
+    val log = Logger.getLogger(InitApp.getClass)
 
   def main(args: Array[String]): Unit = {
+//    val spark = SparkSession.builder.getOrCreate()
+//
+    val config:Config = ConfigFactory.load(args(0))
+    val spark = new SparkConfig(config).startSparkSession()
 
-    val app = SpringApplication.run(classOf[InitApp], args:_*)
+    spark.sparkContext.setLogLevel("ERROR")
 
-    val env: Environment = app.getEnvironment
+    log.setLevel(Level.INFO)
+    log.info("********************************************")
+    log.info(s"File: ${args.mkString(", ")}" )
+    log.info("********************************************")
+
+    log.info(s"Init App ${config.getString("app.name")}")
+
+
+
+    new UserProcesor(config, spark).run()
+
+
   }
-
-  /*
-  def main(args: Array[String]): Unit = {
-  }*/
-
 }

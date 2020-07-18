@@ -3,25 +3,22 @@ package es.luis.detector.twitter
 import java.io.{File, PrintWriter}
 
 import com.google.gson.Gson
-
+import com.typesafe.config.Config
 import org.slf4j.LoggerFactory
-import org.springframework.core.env.Environment
 import twitter4j.{Paging, ResponseList, Status, TwitterFactory}
 import twitter4j.conf.ConfigurationBuilder
 
 import scala.util.control.Breaks.{break, breakable}
 
-class UserExtractor(env: Environment) {
+class UserExtractor(config: Config) {
 
   final val log = LoggerFactory.getLogger(getClass.getName)
 
-  // private final val usersExtract: List[String] = config.getStringList("userExtract").toList
-
   val cb = new ConfigurationBuilder().setDebugEnabled(true)
-    .setOAuthConsumerKey(env.getProperty("twitter.CONSUMER_KEY"))
-    .setOAuthConsumerSecret(env.getProperty("twitter.CONSUMER_SECRET"))
-    .setOAuthAccessToken(env.getProperty("twitter.TOKEN"))
-    .setOAuthAccessTokenSecret(env.getProperty("twitter.TOKEN_SECRET"))
+    .setOAuthConsumerKey(config.getString("twitter.CONSUMER_KEY"))
+    .setOAuthConsumerSecret(config.getString("twitter.CONSUMER_SECRET"))
+    .setOAuthAccessToken(config.getString("twitter.TOKEN"))
+    .setOAuthAccessTokenSecret(config.getString("twitter.TOKEN_SECRET"))
 
   val tf = new TwitterFactory(cb.build())
 
@@ -63,7 +60,7 @@ class UserExtractor(env: Environment) {
     val gson = new Gson()
     var cursor = 1
     breakable {
-      while (cursor < env.getProperty("request_max").toInt) {
+      while (cursor < config.getString("request_max").toInt) {
         try {
           val favorites = twitter.getFavorites(id, new Paging(cursor))
           if (favorites == null || favorites.size() == 0)
@@ -87,7 +84,7 @@ class UserExtractor(env: Environment) {
     val gson = new Gson()
     var cursor = -1
     breakable {
-      while (cursor < env.getProperty("request_max").toInt) {
+      while (cursor < config.getString("request_max").toInt) {
         try {
           val followers = twitter.getFollowersList(name, cursor)
           if (followers == null || followers.size() == 0)
@@ -111,7 +108,7 @@ class UserExtractor(env: Environment) {
     val gson = new Gson()
     var cursor = -1
     breakable {
-      while (cursor < env.getProperty("request_max").toInt) {
+      while (cursor < config.getString("request_max").toInt) {
         try {
           val friends = twitter.getFriendsList(name, cursor)
           if (friends == null || friends.size() == 0)
@@ -138,7 +135,7 @@ class UserExtractor(env: Environment) {
     val gson = new Gson()
     var pag = 1
     breakable {
-      while (pag < env.getProperty("request_max").toInt) {
+      while (pag < config.getString("request_max").toInt) {
         val page = new Paging(pag, 200)
         try {
           val timeline: ResponseList[Status] = twitter.getUserTimeline(name, page)
